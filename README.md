@@ -1,76 +1,76 @@
 # GensenWebAvatar
 
-基于 Three.js 的 GLB 模型加载器，支持完整的材质、纹理和光照系统。
+基于 Three.js 的 GLB 模型查看器，支持多实例 Avatar 加载、外部/嵌入动画、HDR 环境和简单后处理。
 
-## 功能特性
+## 快速开始
 
-- ✅ GLB/GLTF 模型加载
-- ✅ 完整的材质和纹理支持
-- ✅ 多种光照类型（环境光、方向光、半球光、点光源）
-- ✅ 阴影渲染
-- ✅ 轨道控制器（可旋转、缩放、平移）
-- ✅ 加载进度显示
-- ✅ 响应式设计
-
-## 安装
+安装依赖并启动开发服务器：
 
 ```bash
 npm install
-```
-
-## 使用
-
-1. 将你的 GLB 模型文件放在 `public/models/` 文件夹中
-2. 重命名为 `avatar.glb` 或修改 `src/main.js` 中的路径
-3. 运行开发服务器：
-
-```bash
 npm run dev
 ```
 
-4. 浏览器将自动打开 http://localhost:3000
+浏览器会打开 http://localhost:3000（或按 Vite 输出的地址）。
 
-## 构建
+## 新增：Avatar 抽象与多实例支持
 
-```bash
-npm run build
+代码已重构为可复用的 `Avatar` 类（文件：`src/avatar.js`），它封装了模型加载、材质修正、居中/缩放、Y 轴偏移和动画播放逻辑。
+
+- 动画加载顺序：优先尝试外部动画文件（由 `animPath` 指定），若无则回退到模型内嵌动画。
+- 对于骨骼动画（SkinnedMesh），类会尝试在 `SkinnedMesh` 上创建 `AnimationMixer` 并播放。
+
+同时在 `src/main.js` 中提供统一调用：
+
+```javascript
+// 在浏览器控制台或代码中调用，参数为 public/ 下的资源路径
+loadTwoAvatars(modelPathA, modelPathB, animPathA, animPathB)
 ```
 
-构建后的文件将输出到 `dist/` 文件夹。
+示例：
 
-## 项目结构
-
-```
-GensenWebAvatar/
-├── public/
-│   └── models/          # 存放 GLB 模型文件
-│       └── avatar.glb   # 你的模型文件（需要自己添加）
-├── src/
-│   └── main.js          # 主要的 Three.js 代码
-├── index.html           # HTML 入口文件
-├── package.json         # 依赖配置
-├── vite.config.js       # Vite 配置
-└── README.md            # 说明文档
+```javascript
+loadTwoAvatars('/models/avatarA.glb', '/models/avatarB.glb', '/animations/aniA.glb', '/animations/aniB.glb')
 ```
 
-## 光照系统
+运行后会在场景中并排显示两个 Avatar（默认左右分布），每个 Avatar 使用各自的动画资源。
 
-项目包含以下光照：
+## 运行时 API（浏览器控制台）
 
-- **环境光 (AmbientLight)**: 0.5 强度，提供基础照明
-- **方向光 (DirectionalLight)**: 1.5 强度，模拟太阳光，支持阴影
-- **半球光 (HemisphereLight)**: 0.6 强度，模拟天空和地面反射
-- **点光源 (PointLight)**: 0.8 强度，作为补光
+- `setAvatarScale(s, idx = 0)`：设置序号为 `idx` 的 Avatar 缩放倍数。
+- `setModelYOffset(y, idx = 0)`：设置序号为 `idx` 的 Avatar 垂直偏移。
+- `loadTwoAvatars(modelA, modelB, animA, animB)`：按需加载两个 Avatar（见上）。
 
-## 控制
+示例：
 
-- **鼠标左键拖动**: 旋转视角
-- **鼠标滚轮**: 缩放
-- **鼠标右键拖动**: 平移
+```javascript
+// 第一个 Avatar 放大为 1.2
+setAvatarScale(1.2, 0)
 
-## 技术栈
+// 第二个 Avatar 向上偏移 0.5
+setModelYOffset(0.5, 1)
+```
 
-- Three.js - 3D 渲染引擎
-- Vite - 现代前端构建工具
-- GLTFLoader - GLTF/GLB 模型加载器
-- OrbitControls - 相机控制器
+## 原有功能速览
+
+- GLB/GLTF 模型加载（`GLTFLoader`）
+- 材质与贴图色彩空间修正（sRGB）
+- HDR 环境贴图：`public/textures/environment.hdr`（由 `RGBELoader` 加载）
+- 后处理：`EffectComposer` + `UnrealBloomPass`
+- 自定义手势控制：鼠标/触摸拖动用于模型 Y 轴旋转（当前实现会旋转所有加载的 Avatar）
+
+## 约定与性能
+
+- 资源放置：`public/models/` 和 `public/animations/`（Vite 将 `/` 映射到 `public/`）
+- 像素比被限制为设备像素比的最大 2 倍以提高性能
+- 阴影分辨率：1024×1024
+
+## 调试与常见问题
+
+- 控制台提供动画调试日志（列出嵌入与外部 clip 名称及轨道），用于帮助定位动画目标不匹配的问题。
+- 如果动画未作用于模型，请确认外部动画的轨道目标名称与模型节点一致，或在控制台查看 `External clip tracks:` 日志并提交给维护者以便重映射。
+
+## 开发建议
+
+- 如果需要：我可以添加每个 Avatar 的独立旋转选择、UI 控件（缩放/偏移滑块）或将 `Avatar` 类导出为更完整的组件接口。
+
