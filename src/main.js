@@ -236,42 +236,110 @@ function loadGLBModel() {
             // 创建 AnimationMixer，用于播放模型的动画
             mixer = new THREE.AnimationMixer(model);
 
-            // 如果模型自身包含动画，优先使用它
-            if (gltf.animations && gltf.animations.length > 0) {
-                const clip = gltf.animations[0];
-                const action = mixer.clipAction(clip);
-                action.reset();
-                action.play();
-                console.log('Playing embedded model animation:', clip.name || 'clip0');
-            } else {
-                // 尝试从 public/animations/aniA.glb 加载外部动画并应用到 avatar
-                const animLoader = new GLTFLoader();
+            // 优先尝试从 external animation 文件加载动画（/animations/aniA.glb）
+            (function tryExternalThenEmbedded() {
                 const animPath = '/animations/aniA.glb';
+                const animLoader = new GLTFLoader();
+
                 animLoader.load(
                     animPath,
                     (animGltf) => {
                         if (animGltf.animations && animGltf.animations.length > 0) {
                             const clip = animGltf.animations[0];
-                            const action = mixer.clipAction(clip);
-                            action.reset();
-                            action.play();
-                            console.log('Applied external animation from', animPath, 'clip:', clip.name || 'clip0');
+                            try {
+                                console.log('External animations found in', animPath, 'count:', animGltf.animations.length);
+                                const extNames = animGltf.animations.map(c => c.name || '(no name)');
+                                console.log('External clip names:', extNames);
+                                if (clip.tracks && clip.tracks.length) {
+                                    console.log('External clip tracks:');
+                                    clip.tracks.forEach(t => console.log('  -', t.name));
+                                }
+                            } catch (e) { console.warn(e); }
+
+                            // 尝试将外部动画应用到当前 mixer（model 根）
+                            let applied = false;
+                            try {
+                                const action = mixer.clipAction(clip);
+                                action.reset();
+                                action.play();
+                                applied = true;
+                                console.log('Applied external animation to model root:', animPath, 'clip:', clip.name || 'clip0');
+                            } catch (e) {
+                                console.warn('Direct apply of external animation to model failed:', e);
+                            }
+
+                            // 回退：如果直接应用无效，尝试在 SkinnedMesh 上创建 mixer 并播放骨骼动画
+                            if (!applied) {
+                                let skinned = null;
+                                model.traverse((c) => { if (c.isSkinnedMesh) skinned = c; });
+                                if (skinned) {
+                                    try {
+                                        mixer = new THREE.AnimationMixer(skinned);
+                                        const skAction = mixer.clipAction(clip);
+                                        skAction.reset();
+                                        skAction.play();
+                                        console.log('Applied external animation to SkinnedMesh root:', skinned.name || skinned.id);
+                                    } catch (e) {
+                                        console.warn('Failed to apply clip to SkinnedMesh:', e);
+                                    }
+                                } else {
+                                    console.warn('No SkinnedMesh found to try fallback application for external animation');
+                                }
+                            }
                         } else {
-                            console.warn('No animations found in', animPath);
+                            console.log('No animations in external file, falling back to embedded animations if present');
+                            if (gltf.animations && gltf.animations.length > 0) {
+                                const clip = gltf.animations[0];
+                                const action = mixer.clipAction(clip);
+                                action.reset();
+                                action.play();
+                                console.log('Playing embedded model animation (fallback):', clip.name || 'clip0');
+                            }
                         }
                     },
                     undefined,
                     (err) => {
-                        console.warn('Failed to load external animation:', animPath, err);
+                        console.warn('Failed to load external animation:', animPath, err, '\nFalling back to embedded animations if present.');
+                        if (gltf.animations && gltf.animations.length > 0) {
+                            const clip = gltf.animations[0];
+                            const action = mixer.clipAction(clip);
+                            action.reset();
+                            action.play();
+                            console.log('Playing embedded model animation (fallback):', clip.name || 'clip0');
+                        }
                     }
                 );
-            }
+            })();
 
             // 隐藏加载提示
             loadingElement.classList.add('hidden');
 
             console.log('模型加载成功！');
-            console.log('Animations:', gltf.animations);
+            console.log('Animations (embedded):', gltf.animations);
+            try {
+                const names = (gltf.animations || []).map(c => c.name || '(no name)');
+                console.log('Embedded clip names:', names);
+                (gltf.animations || []).forEach((c, i) => console.log(` embedded[${i}] name:${c.name||'(no name)'} duration:${c.duration} tracks:${(c.tracks?c.tracks.length:0)}`));
+            } catch (e) { console.warn('Error logging embedded animations', e); }
+
+            // DEBUG: 打印每个动画片段的轨道名称，帮助定位轨道所属对象
+            function logClipDetails(clip, label) {
+                try {
+                    console.log(label, 'clip name:', clip.name || '(no name)');
+                    if (clip.tracks && clip.tracks.length) {
+                        console.log(label, 'tracks:');
+                        clip.tracks.forEach((t) => console.log('  -', t.name));
+                    } else {
+                        console.log(label, 'no tracks');
+                    }
+                } catch (e) {
+                    console.warn('Error logging clip details', e);
+                }
+            }
+
+            if (gltf.animations && gltf.animations.length > 0) {
+                gltf.animations.forEach((clip, idx) => logClipDetails(clip, `embedded[${idx}]`));
+            }
         },
         // onProgress 回调
         (xhr) => {
