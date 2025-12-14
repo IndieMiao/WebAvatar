@@ -5,39 +5,45 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import Avatar from './avatar.js';
 
 // 场景、相机、渲染器设置
 let scene, camera, renderer, controls;
-let model;
 let composer, bloomPass;
-let mixer; // AnimationMixer for avatar
 const clock = new THREE.Clock();
-// Avatar scale control: multiplier applied on top of computed base model scale
-let avatarScale = 0.5;
-let baseModelScale = 1.0; // computed when model loads
-// Avatar origin / vertical offset control (added to model's centered Y)
-let modelYOffset = 0.0;
-let baseModelYOffset = 0.0; // recorded after centering/scaling
 
-function setAvatarScale(s) {
-    avatarScale = Number(s) || 1.0;
-    if (model) {
-        model.scale.setScalar(baseModelScale * avatarScale);
-        console.log('Avatar scale set to', avatarScale);
-    }
+// List of Avatar instances
+const avatars = [];
+
+// simple runtime helpers operating on first avatar for backwards compatibility
+function setAvatarScale(s, idx = 0) {
+    if (avatars[idx]) avatars[idx].setScale(s);
 }
 
-function setModelYOffset(y) {
-    modelYOffset = Number(y) || 0;
-    if (model) {
-        model.position.y = baseModelYOffset + modelYOffset;
-        console.log('Avatar Y offset set to', modelYOffset);
-    }
+function setModelYOffset(y, idx = 0) {
+    if (avatars[idx]) avatars[idx].setYOffset(y);
 }
 
-// Expose setter for quick runtime control (e.g., in DevTools)
 window.setAvatarScale = setAvatarScale;
 window.setModelYOffset = setModelYOffset;
+
+// Unified loader for two avatars: loadTwoAvatars(modelA, modelB, animA, animB)
+window.loadTwoAvatars = async function(modelA, modelB, animA, animB) {
+    const loadingElement = document.getElementById('loading');
+    loadingElement.classList.remove('hidden');
+    // create two avatars positioned left and right
+    const a1 = new Avatar(scene, { modelPath: modelA, animPath: animA, position: new THREE.Vector3(0,0,0), avatarScale: 0.5 });
+    const a2 = new Avatar(scene, { modelPath: modelB, animPath: animB, position: new THREE.Vector3(0,0,0), avatarScale: 0.5 });
+    avatars.length = 0; avatars.push(a1, a2);
+    try {
+        await Promise.all([a1.load(), a2.load()]);
+        console.log('Both avatars loaded');
+    } catch (e) {
+        console.warn('One or more avatars failed to load', e);
+    } finally {
+        loadingElement.classList.add('hidden');
+    }
+};
 
 function init() {
     // 创建场景
@@ -51,7 +57,7 @@ function init() {
         0.1,
         1000
     );
-    camera.position.set(0, 1.8, 6);
+    camera.position.set(0, 1.8, 9);
     // 通过lookAt设置相机朝向目标点，自动计算rotation
     camera.lookAt(0, .7, 0);
 
@@ -128,8 +134,8 @@ function init() {
     wall.receiveShadow = true;
     scene.add(wall);
 
-    // 加载GLB模型
-    loadGLBModel();
+    // 加载两个 Avatar（默认占位路径），可在运行时通过 `loadTwoAvatars(...)` 覆盖
+    loadTwoAvatars('/models/avatar1.glb', '/models/avatar2.glb', '/animations/aniA.glb', '/animations/aniB.glb');
 
     // 处理窗口大小调整
     window.addEventListener('resize', onWindowResize, false);
@@ -179,186 +185,20 @@ function loadHDREnvironment() {
 }
 
 function loadGLBModel() {
-    const loader = new GLTFLoader();
+    // Create a single Avatar from the default model path and push to avatars list
     const loadingElement = document.getElementById('loading');
     const progressFill = document.getElementById('progress-fill');
-
-    // 将你的GLB文件放在 public/models/ 文件夹中
-    // 例如: public/models/avatar.glb
     const modelPath = '/models/avatar.glb';
-
-    loader.load(
-        modelPath,
-        // onLoad 回调
-        (gltf) => {
-            model = gltf.scene;
-
-            // 确保材质和纹理正确加载
-            model.traverse((child) => {
-                if (child.isMesh) {
-                    // 启用阴影
-                    child.castShadow = true;
-                    child.receiveShadow = true;
-
-                    // 确保材质正确设置
-                    if (child.material) {
-                        // 如果是数组材质
-                        if (Array.isArray(child.material)) {
-                            child.material.forEach(material => {
-                                setupMaterial(material);
-                            });
-                        } else {
-                            setupMaterial(child.material);
-                        }
-                    }
-                }
-            });
-
-            // 居中模型
-            const box = new THREE.Box3().setFromObject(model);
-            const center = box.getCenter(new THREE.Vector3());
-            model.position.sub(center);
-
-            // 缩放模型以适应场景
-            const size = box.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z);
-            const scale = 2 / maxDim;
-            // 保存基础缩放并应用外部控制器 `avatarScale`
-            baseModelScale = scale;
-            model.scale.setScalar(baseModelScale * avatarScale);
-
-            // 记录基础 Y 偏移（居中/缩放后），并应用可配置的 Y 偏移
-            baseModelYOffset = model.position.y;
-            model.position.y = baseModelYOffset + modelYOffset;
-
-            scene.add(model);
-
-            // 创建 AnimationMixer，用于播放模型的动画
-            mixer = new THREE.AnimationMixer(model);
-
-            // 优先尝试从 external animation 文件加载动画（/animations/aniA.glb）
-            (function tryExternalThenEmbedded() {
-                const animPath = '/animations/aniA.glb';
-                const animLoader = new GLTFLoader();
-
-                animLoader.load(
-                    animPath,
-                    (animGltf) => {
-                        if (animGltf.animations && animGltf.animations.length > 0) {
-                            const clip = animGltf.animations[0];
-                            try {
-                                console.log('External animations found in', animPath, 'count:', animGltf.animations.length);
-                                const extNames = animGltf.animations.map(c => c.name || '(no name)');
-                                console.log('External clip names:', extNames);
-                                if (clip.tracks && clip.tracks.length) {
-                                    console.log('External clip tracks:');
-                                    clip.tracks.forEach(t => console.log('  -', t.name));
-                                }
-                            } catch (e) { console.warn(e); }
-
-                            // 尝试将外部动画应用到当前 mixer（model 根）
-                            let applied = false;
-                            try {
-                                const action = mixer.clipAction(clip);
-                                action.reset();
-                                action.play();
-                                applied = true;
-                                console.log('Applied external animation to model root:', animPath, 'clip:', clip.name || 'clip0');
-                            } catch (e) {
-                                console.warn('Direct apply of external animation to model failed:', e);
-                            }
-
-                            // 回退：如果直接应用无效，尝试在 SkinnedMesh 上创建 mixer 并播放骨骼动画
-                            if (!applied) {
-                                let skinned = null;
-                                model.traverse((c) => { if (c.isSkinnedMesh) skinned = c; });
-                                if (skinned) {
-                                    try {
-                                        mixer = new THREE.AnimationMixer(skinned);
-                                        const skAction = mixer.clipAction(clip);
-                                        skAction.reset();
-                                        skAction.play();
-                                        console.log('Applied external animation to SkinnedMesh root:', skinned.name || skinned.id);
-                                    } catch (e) {
-                                        console.warn('Failed to apply clip to SkinnedMesh:', e);
-                                    }
-                                } else {
-                                    console.warn('No SkinnedMesh found to try fallback application for external animation');
-                                }
-                            }
-                        } else {
-                            console.log('No animations in external file, falling back to embedded animations if present');
-                            if (gltf.animations && gltf.animations.length > 0) {
-                                const clip = gltf.animations[0];
-                                const action = mixer.clipAction(clip);
-                                action.reset();
-                                action.play();
-                                console.log('Playing embedded model animation (fallback):', clip.name || 'clip0');
-                            }
-                        }
-                    },
-                    undefined,
-                    (err) => {
-                        console.warn('Failed to load external animation:', animPath, err, '\nFalling back to embedded animations if present.');
-                        if (gltf.animations && gltf.animations.length > 0) {
-                            const clip = gltf.animations[0];
-                            const action = mixer.clipAction(clip);
-                            action.reset();
-                            action.play();
-                            console.log('Playing embedded model animation (fallback):', clip.name || 'clip0');
-                        }
-                    }
-                );
-            })();
-
-            // 隐藏加载提示
-            loadingElement.classList.add('hidden');
-
-            console.log('模型加载成功！');
-            console.log('Animations (embedded):', gltf.animations);
-            try {
-                const names = (gltf.animations || []).map(c => c.name || '(no name)');
-                console.log('Embedded clip names:', names);
-                (gltf.animations || []).forEach((c, i) => console.log(` embedded[${i}] name:${c.name||'(no name)'} duration:${c.duration} tracks:${(c.tracks?c.tracks.length:0)}`));
-            } catch (e) { console.warn('Error logging embedded animations', e); }
-
-            // DEBUG: 打印每个动画片段的轨道名称，帮助定位轨道所属对象
-            function logClipDetails(clip, label) {
-                try {
-                    console.log(label, 'clip name:', clip.name || '(no name)');
-                    if (clip.tracks && clip.tracks.length) {
-                        console.log(label, 'tracks:');
-                        clip.tracks.forEach((t) => console.log('  -', t.name));
-                    } else {
-                        console.log(label, 'no tracks');
-                    }
-                } catch (e) {
-                    console.warn('Error logging clip details', e);
-                }
-            }
-
-            if (gltf.animations && gltf.animations.length > 0) {
-                gltf.animations.forEach((clip, idx) => logClipDetails(clip, `embedded[${idx}]`));
-            }
-        },
-        // onProgress 回调
-        (xhr) => {
-            if (xhr.lengthComputable && xhr.total > 0) {
-                const percentComplete = (xhr.loaded / xhr.total) * 100;
-                progressFill.style.width = percentComplete + '%';
-                console.log('加载进度: ' + Math.round(percentComplete) + '%');
-            } else {
-                // 如果无法获取总大小，显示加载的字节数
-                console.log('已加载: ' + Math.round(xhr.loaded / 1024) + ' KB');
-                progressFill.style.width = '50%'; // 显示一个估计进度
-            }
-        },
-        // onError 回调
-        (error) => {
-            console.error('加载模型时出错:', error);
-            loadingElement.innerHTML = '<div>加载失败</div><div style="font-size: 14px; margin-top: 10px;">错误: ' + error.message + '</div><div style="font-size: 12px; margin-top: 5px;">请检查控制台以获取详细信息</div>';
-        }
-    );
+    const avatar = new Avatar(scene, { modelPath, animPath: '/animations/aniA.glb', position: new THREE.Vector3(0,0,0), avatarScale: 0.5 });
+    avatars.push(avatar);
+    // show loading (already visible by default)
+    avatar.load().then(() => {
+        loadingElement.classList.add('hidden');
+        console.log('Default avatar loaded');
+    }).catch((e) => {
+        loadingElement.classList.add('hidden');
+        console.warn('Default avatar failed to load', e);
+    });
 }
 
 function setupMaterial(material) {
@@ -416,11 +256,11 @@ function setupModelInteraction() {
     });
 
     canvas.addEventListener('mousemove', (e) => {
-        if (isDragging && model) {
+        if (isDragging && avatars.length > 0) {
             const deltaX = e.clientX - previousMousePosition.x;
 
             modelRotationVelocity = deltaX * 0.005;
-            model.rotation.y += modelRotationVelocity;
+            avatars.forEach(av => { if (av.model) av.model.rotation.y += modelRotationVelocity; });
 
             previousMousePosition = { x: e.clientX, y: e.clientY };
         }
@@ -446,11 +286,11 @@ function setupModelInteraction() {
     });
 
     canvas.addEventListener('touchmove', (e) => {
-        if (isDragging && model && e.touches.length === 1) {
+        if (isDragging && avatars.length > 0 && e.touches.length === 1) {
             const deltaX = e.touches[0].clientX - previousMousePosition.x;
 
             modelRotationVelocity = deltaX * 0.005;
-            model.rotation.y += modelRotationVelocity;
+            avatars.forEach(av => { if (av.model) av.model.rotation.y += modelRotationVelocity; });
 
             previousMousePosition = {
                 x: e.touches[0].clientX,
@@ -469,14 +309,12 @@ function animate() {
 
     const delta = clock.getDelta();
 
-    // 更新动画混合器
-    if (mixer) {
-        mixer.update(delta);
-    }
+    // 更新所有 Avatar 的动画混合器
+    avatars.forEach(av => av.update(delta));
 
-    // 应用惯性阻尼效果（仅Y轴）
-    if (!isDragging && model) {
-        model.rotation.y += modelRotationVelocity;
+    // 应用惯性阻尼效果（仅Y轴）对所有 avatars
+    if (!isDragging && avatars.length > 0) {
+        avatars.forEach(av => { if (av.model) av.model.rotation.y += modelRotationVelocity; });
         modelRotationVelocity *= rotationDamping;
     }
 
