@@ -10,6 +10,34 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 let scene, camera, renderer, controls;
 let model;
 let composer, bloomPass;
+let mixer; // AnimationMixer for avatar
+const clock = new THREE.Clock();
+// Avatar scale control: multiplier applied on top of computed base model scale
+let avatarScale = 0.5;
+let baseModelScale = 1.0; // computed when model loads
+// Avatar origin / vertical offset control (added to model's centered Y)
+let modelYOffset = 0.0;
+let baseModelYOffset = 0.0; // recorded after centering/scaling
+
+function setAvatarScale(s) {
+    avatarScale = Number(s) || 1.0;
+    if (model) {
+        model.scale.setScalar(baseModelScale * avatarScale);
+        console.log('Avatar scale set to', avatarScale);
+    }
+}
+
+function setModelYOffset(y) {
+    modelYOffset = Number(y) || 0;
+    if (model) {
+        model.position.y = baseModelYOffset + modelYOffset;
+        console.log('Avatar Y offset set to', modelYOffset);
+    }
+}
+
+// Expose setter for quick runtime control (e.g., in DevTools)
+window.setAvatarScale = setAvatarScale;
+window.setModelYOffset = setModelYOffset;
 
 function init() {
     // 创建场景
@@ -195,12 +223,49 @@ function loadGLBModel() {
             const size = box.getSize(new THREE.Vector3());
             const maxDim = Math.max(size.x, size.y, size.z);
             const scale = 2 / maxDim;
-            model.scale.multiplyScalar(scale);
+            // 保存基础缩放并应用外部控制器 `avatarScale`
+            baseModelScale = scale;
+            model.scale.setScalar(baseModelScale * avatarScale);
 
-            // 向上移动模型
-            model.position.y += 0.92;
+            // 记录基础 Y 偏移（居中/缩放后），并应用可配置的 Y 偏移
+            baseModelYOffset = model.position.y;
+            model.position.y = baseModelYOffset + modelYOffset;
 
             scene.add(model);
+
+            // 创建 AnimationMixer，用于播放模型的动画
+            mixer = new THREE.AnimationMixer(model);
+
+            // 如果模型自身包含动画，优先使用它
+            if (gltf.animations && gltf.animations.length > 0) {
+                const clip = gltf.animations[0];
+                const action = mixer.clipAction(clip);
+                action.reset();
+                action.play();
+                console.log('Playing embedded model animation:', clip.name || 'clip0');
+            } else {
+                // 尝试从 public/animations/aniA.glb 加载外部动画并应用到 avatar
+                const animLoader = new GLTFLoader();
+                const animPath = '/animations/aniA.glb';
+                animLoader.load(
+                    animPath,
+                    (animGltf) => {
+                        if (animGltf.animations && animGltf.animations.length > 0) {
+                            const clip = animGltf.animations[0];
+                            const action = mixer.clipAction(clip);
+                            action.reset();
+                            action.play();
+                            console.log('Applied external animation from', animPath, 'clip:', clip.name || 'clip0');
+                        } else {
+                            console.warn('No animations found in', animPath);
+                        }
+                    },
+                    undefined,
+                    (err) => {
+                        console.warn('Failed to load external animation:', animPath, err);
+                    }
+                );
+            }
 
             // 隐藏加载提示
             loadingElement.classList.add('hidden');
@@ -333,6 +398,13 @@ function setupModelInteraction() {
 
 function animate() {
     requestAnimationFrame(animate);
+
+    const delta = clock.getDelta();
+
+    // 更新动画混合器
+    if (mixer) {
+        mixer.update(delta);
+    }
 
     // 应用惯性阻尼效果（仅Y轴）
     if (!isDragging && model) {
